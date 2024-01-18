@@ -1,0 +1,3 @@
+[submodule "rama-clj-kondo"]
+	path = rama-clj-kondo
+	url = git@github.com:redplanetlabs/rama-clj-kondo.git
