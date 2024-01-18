@@ -37,6 +37,10 @@
           "saved user id should be the one we registered with")
 
       (is (nil? (foreign-select-one (keypath user-id-2) users))
-          "failed user id should not be saved"))))
+          "failed user id should not be saved")
+
+      (is (sut/user-connect-success?
+           (foreign-append! user-connects-depot
+                            {:user-id user-id-2 :user-name "foo"}))))))
 
 #_(run-tests)

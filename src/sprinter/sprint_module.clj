@@ -51,7 +51,6 @@
         (ack-return> {:success false
                       :reason "username already taken"})
         (else>)
-        (println "connected" *user-connect)
         (local-transform> [(keypath *user-name) (termval *user-id)]
                           $$username->id)
         (|hash *user-id)
