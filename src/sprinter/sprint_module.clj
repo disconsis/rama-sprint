@@ -1,4 +1,4 @@
-(ns rama-clojure-starter.sprint-module
+(ns sprinter.sprint-module
   (:use [com.rpl.rama]
         [com.rpl.rama.path])
   (:refer [com.rpl.rama defmodule])
