@@ -1,8 +1,9 @@
-(ns rama-clojure-starter.my-module
+(ns rama-clojure-starter.sprint-module
   (:use [com.rpl.rama]
         [com.rpl.rama.path])
+  (:refer [com.rpl.rama defmodule])
   (:require [com.rpl.rama.aggs :as aggs]
             [com.rpl.rama.ops :as ops]))
 
-(defmodule MyModule [setup topologies]
+(defmodule SprintModule [setup topologies]
   )
