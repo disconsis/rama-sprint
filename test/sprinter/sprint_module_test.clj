@@ -96,4 +96,21 @@
       (is (sut/project-success?
            (foreign-append! *project-creation-depot
                             (sut/->ProjectCreate project-id-2 "proj-1" user-id-2)))
-          "other user can create another project with a used project name"))))
+          "other user can create another project with a used project name")
+
+      (foreign-append! *project-creation-depot (sut/->ProjectCreate (random-uuid) "other-proj" user-id-1))
+
+      (is (sut/project-failure?
+           (foreign-append! *project-edits-depot
+                            (sut/->ProjectEdit project-id-1 user-id-1 :project-name "other-proj")))
+          "can't rename a project to something already used by user")
+
+      (is (sut/project-success?
+           (foreign-append! *project-edits-depot
+                            (sut/->ProjectEdit project-id-2 user-id-2 :project-name "other-proj")))
+          "user can rename project to the name of another user's project")
+
+      (is (sut/project-success?
+           (foreign-append! *project-edits-depot
+                            (sut/->ProjectEdit project-id-1 user-id-1 :project-name "else-proj")))
+          "can rename a project to an unused name"))))

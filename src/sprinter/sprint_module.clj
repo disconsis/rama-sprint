@@ -18,14 +18,13 @@
 (defrecord UserEdit [user-id field value])
 
 (defrecord ProjectCreate [project-id project-name user-id])
-(defrecord ProjectEdit [project-id field value])
+(defrecord ProjectEdit [project-id user-id field value])
 
 (defn current-time []
   (System/currentTimeMillis))
 
-(defn nil-or-equal [value]
-  (fn [other]
-    (or (nil? other) (= value other))))
+(defn nil-or-equal-to? [expected actual]
+  (or (nil? actual) (= expected actual)))
 
 ;; TODO expire user sessions and delete their projects
 
@@ -49,30 +48,28 @@
 
     (<<sources us
       ;; user connection flow
-      (source> *user-connects-depot :> {:keys [*user-name *user-id] :as *user-connect})
+      (source> *user-connects-depot :> {:keys [*user-name *user-id]})
       (local-select> (keypath *user-name) $$username->id :> *curr-user-id)
-      (<<if (and> (some? *curr-user-id) (not= *user-id *curr-user-id))
-        (<<do
-         (println "could not accept" *user-connect "since username is taken with id" *curr-user-id)
-         (ack-return> {:success false
-                       :reason "username already taken"}))
+      (<<if (not (nil-or-equal-to? *user-id *curr-user-id))
+        (ack-return> {:success false
+                      :reason "username already taken"})
         (else>)
         (<<do
+         (|hash *user-id)
+         (local-transform> [(keypath *user-id)
+                            (multi-path [:user-name (termval *user-name)]
+                                        [:connected-at (termval (current-time))])]
+                           $$users)
+
+         ;; need to do this last since this is the first thing we check in case of failures
+         (|hash *user-name)
          (local-transform> [(keypath *user-name) (termval *user-id)]
                            $$username->id)
-         (|hash *user-id)
-         (identity (current-time) :> *time)
-         (local-transform>
-          [(keypath *user-id)
-           (multi-path [:user-name (termval *user-name)]
-                       [:connected-at (termval *time)])]
-          $$users)
-         (println "accepted user" *user-id *user-name *time)
          (ack-return> {:success true
                        :user-id *user-id})))
 
       ;; user edit flow
-      (source> *user-edits-depot :> {:keys [*user-id *field *value] :as *edit})
+      (source> *user-edits-depot :> {:keys [*user-id *field *value]})
       (local-select> (keypath *user-id) $$users :> {*curr-user-name :user-name :as *curr-info})
       (<<cond
        (case> (nil? *curr-info))
@@ -84,20 +81,21 @@
        (ack-return> {:success true})
 
        (case> (= :user-name *field))
-       (|hash *value)
-       (<<if (some? (local-select> (keypath *value) $$username->id))
+       (<<if (some? (select> (keypath *value) $$username->id))
          (ack-return> {:success false
                        :reason "username already taken"})
          (else>)
          (<<do
-          (local-transform> [(keypath *value) (termval *user-id)]
-                            $$username->id)
           (|hash *curr-user-name)
           (local-transform> [(keypath *curr-user-name) NONE>]
                             $$username->id)
           (|hash *user-id)
           (local-transform> [(keypath *user-id *field) (termval *value)]
                             $$users)
+          ;; need to do this last since this is the first thing we check in case of failures
+          (|hash *value)
+          (local-transform> [(keypath *value) (termval *user-id)]
+                            $$username->id)
           (ack-return> {:success true})))
 
        (default>)
@@ -115,31 +113,76 @@
                                            :created-at Long})})
 
     (<<sources ps
-      (source> *project-creation-depot :> {:keys [*project-id *project-name *user-id] :as *project-create})
+      ;; project creation flow
+      (source> *project-creation-depot :> {:keys [*project-id *project-name *user-id]})
       (<<cond
        (case> (nil? (select> (keypath *user-id) $$users)))
        (ack-return> {:success false
                      :reason "unknown user-id"})
 
-       (case> (select> [(keypath *user-id *project-name)
-                        ;; we need to check if the old project id is equal to this one
-                        ;; since that indicates that this is a retried request
-                        (view (complement (nil-or-equal *project-id)))]
-                       $$user->projects))
+       ;; we need to check if the old project id is equal to this one
+       ;; since that indicates that this is a retried request
+       (case> (not (nil-or-equal-to?
+                    *project-id
+                    (select> (keypath *user-id *project-name) $$user->projects))))
        (ack-return> {:success false
                      :reason "project name already used by user"})
 
        (default>)
-       (|hash *user-id)
-       (+compound $$user->projects {*user-id {*project-name (+last *project-id)}})
        (|hash *project-id)
        (local-transform> [(keypath *project-id)
                           (multi-path [:project-name (termval *project-name)]
                                       [:created-by (termval *user-id)]
                                       [:created-at (termval (current-time))])]
                          $$projects)
+
+       ;; need to do this last since this is the first thing we check in case of failures
+       (|hash *user-id)
+       (+compound $$user->projects {*user-id {*project-name (+last *project-id)}})
        (ack-return> {:success true
-                     :project-id *project-id})))))
+                     :project-id *project-id}))
+
+      ;; project edit flow
+      (source> *project-edits-depot :> {:keys [*project-id *user-id *field *value]})
+      (select> (keypath *project-id) $$projects :> {:keys [*created-by] :as *curr-info})
+      (<<cond
+       (case> (nil? *curr-info))
+       (ack-return> {:success false
+                     :reason "project-id not found"})
+
+       (case> (= :created-by *field))
+       (ack-return> {:success false
+                     :reason "can't change creator of project"})
+
+       (case> (not= *created-by *user-id))
+       (ack-return> {:success false
+                     :reason "project can only be edited by creator"})
+
+       (case> (= (get *field *curr-info) *value))
+       ;; no change required
+       (ack-return> {:success true})
+
+       (case> (= :project-name *field))
+       (<<if (some? (select> (keypath *user-id *value) $$user->projects))
+         (ack-return> {:success false
+                       :reason "another project by the new name already exists"})
+         (else>)
+         (<<do
+          (|hash *project-id)
+          (local-transform> [(keypath *project-id *field) (termval *value)] $$projects)
+          ;; need to do this last since this is the first thing we check in case of failures
+          (|hash *user-id)
+          (local-transform> [(keypath *user-id)
+                             (multi-path [(keypath (get :project-name *curr-info)) NONE>]
+                                         [(keypath *value) (termval *project-id)])]
+                            $$user->projects)
+          (ack-return> {:success true})))
+
+       (default>)
+       (|hash *user-id)
+       (local-transform> [(keypath *user-id *field) (termval *value)]
+                         $$projects)
+       (ack-return> {:success true})))))
 
 
 (defn user-success? [result]
@@ -162,5 +205,5 @@
 ;;  (println "foo"))
 
 ;; (?<-
-;;  (filter> (nil? (local-select> (keypath "ketan") {"ketan" (random-uuid)})))
+ ;;  (filter> (nil? (local-select> (keypath "ketan") {"ketan" (random-uuid)})))
 ;;  (println "connected"))
