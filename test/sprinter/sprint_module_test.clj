@@ -45,14 +45,14 @@
                             (sut/->UserConnect user-id-2 "foo"))))
 
       (is (sut/user-failure?
-           (foreign-append! *user-connects-depot
+           (foreign-append! *user-edits-depot
                             (sut/->UserEdit user-id-2 :user-name "ketan")))
           "trying to change username to a taken one should fail")
 
       (is (= "foo" (foreign-select-one (keypath user-id-2 :user-name) $$users)))
 
       (is (sut/user-success?
-           (foreign-append! *user-connects-depot
+           (foreign-append! *user-edits-depot
                             (sut/->UserEdit user-id-2 :user-name "bar")))
           "trying to change username to a an unused one should succeed")
 
@@ -65,5 +65,3 @@
       (is (some? (foreign-select-one (keypath "bar") $$username->id))
           "new name should be present in the map")
       )))
-
-#_(run-tests)

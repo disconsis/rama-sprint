@@ -43,6 +43,7 @@
                                       :connected-at Long})})
 
     (<<sources s
+      ;; user connection flow
       (source> *user-connects-depot :> {:keys [*user-name *user-id] :as *user-connect})
       (local-select> (keypath *user-name) $$username->id :> *curr-user-id)
       (<<if (and> (some? *curr-user-id) (not= *user-id *curr-user-id))
@@ -63,7 +64,41 @@
           $$users)
          (println "accepted user" *user-id *user-name *time)
          (ack-return> {:success true
-                       :user-id *user-id}))))))
+                       :user-id *user-id})))
+
+      ;; user edit flow
+      (source> *user-edits-depot :> {:keys [*user-id *field *value] :as *edit})
+      (local-select> (keypath *user-id) $$users :> {*curr-user-name :user-name :as *curr-info})
+      (<<cond
+       (case> (nil? *curr-info))
+       (ack-return> {:success false
+                     :reason "user-id not found"})
+
+       (case> (= (get *field *curr-info) *value))
+       ;; no change required
+       (ack-return> {:success true})
+
+       (case> (= :user-name *field))
+       (|hash *value)
+       (<<if (some? (local-select> (keypath *value) $$username->id))
+         (ack-return> {:success false
+                       :reason "username already taken"})
+         (else>)
+         (<<do
+          (local-transform> [(keypath *value) (termval *user-id)]
+                            $$username->id)
+          (|hash *curr-user-name)
+          (local-transform> [(keypath *curr-user-name) NONE>]
+                            $$username->id)
+          (|hash *user-id)
+          (local-transform> [(keypath *user-id *field) (termval *value)]
+                            $$users)
+          (ack-return> {:success true})))
+
+       (default>)
+       (local-transform> [(keypath *user-id *field) (termval *value)]
+                         $$users)
+       (ack-return> {:success true})))))
 
 
 (defn user-success? [result]
