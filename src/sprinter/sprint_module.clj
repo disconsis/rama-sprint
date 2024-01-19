@@ -2,9 +2,7 @@
   (:use [com.rpl.rama]
         [com.rpl.rama.path])
   (:require [com.rpl.rama.aggs :as aggs]
-            [com.rpl.rama.ops :as ops]
-            ;; stop clj-kondo complaining about undefined vars
-            [com.rpl.rama :refer [ack-return>]])
+            [com.rpl.rama.ops :as ops])
   (:import (clojure.lang Keyword)
            (java.util UUID)))
 
