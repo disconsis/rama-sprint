@@ -18,7 +18,7 @@
           user-id-1 (random-uuid)
           user-id-2 (random-uuid)]
 
-      (is (sut/user-connect-success?
+      (is (sut/user-success?
            (foreign-append! *user-connects-depot
                             {:user-id user-id-1 :user-name "ketan"}))
           "connection try with an unused username should succeed")
@@ -29,7 +29,7 @@
       (is (= "ketan" (foreign-select-one (keypath user-id-1 :user-name) $$users))
           "saved user id should map to the correct username")
 
-      (is (sut/user-connect-failure?
+      (is (sut/user-failure?
            (foreign-append! *user-connects-depot
                             {:user-id user-id-2 :user-name "ketan"}))
           "connection try with a taken username should fail")
@@ -40,7 +40,7 @@
       (is (nil? (foreign-select-one (keypath user-id-2) $$users))
           "failed user id should not be saved")
 
-      (is (sut/user-connect-success?
+      (is (sut/user-success?
            (foreign-append! *user-connects-depot
                             {:user-id user-id-2 :user-name "foo"}))))))
 

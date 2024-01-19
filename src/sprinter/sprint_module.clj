@@ -65,11 +65,11 @@
                       :user-id *user-id})))))
 
 
-(defn user-connect-success? [result]
+(defn user-success? [result]
   (get-in result ["users" :success]))
 
-(def user-connect-failure?
-  (complement user-connect-success?))
+(def user-failure?
+  (complement user-success?))
 
 ;; ------------
 ;;   Dev area
