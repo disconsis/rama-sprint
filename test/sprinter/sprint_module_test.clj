@@ -20,7 +20,7 @@
 
       (is (sut/user-success?
            (foreign-append! *user-connects-depot
-                            {:user-id user-id-1 :user-name "ketan"}))
+                            (sut/->UserConnect user-id-1 "ketan")))
           "connection try with an unused username should succeed")
 
       (is (= user-id-1 (foreign-select-one (keypath "ketan") $$username->id))
@@ -31,7 +31,7 @@
 
       (is (sut/user-failure?
            (foreign-append! *user-connects-depot
-                            {:user-id user-id-2 :user-name "ketan"}))
+                            (sut/->UserConnect user-id-2 "ketan")))
           "connection try with a taken username should fail")
 
       (is (= user-id-1 (foreign-select-one (keypath "ketan") $$username->id))
@@ -42,6 +42,28 @@
 
       (is (sut/user-success?
            (foreign-append! *user-connects-depot
-                            {:user-id user-id-2 :user-name "foo"}))))))
+                            (sut/->UserConnect user-id-2 "foo"))))
+
+      (is (sut/user-failure?
+           (foreign-append! *user-connects-depot
+                            (sut/->UserEdit user-id-2 :user-name "ketan")))
+          "trying to change username to a taken one should fail")
+
+      (is (= "foo" (foreign-select-one (keypath user-id-2 :user-name) $$users)))
+
+      (is (sut/user-success?
+           (foreign-append! *user-connects-depot
+                            (sut/->UserEdit user-id-2 :user-name "bar")))
+          "trying to change username to a an unused one should succeed")
+
+      (is (= "bar" (foreign-select-one (keypath user-id-2 :user-name) $$users))
+          "edit to username should be saved")
+
+      (is (nil? (foreign-select-one (keypath "foo") $$username->id))
+          "old name should be removed from the map")
+
+      (is (some? (foreign-select-one (keypath "bar") $$username->id))
+          "new name should be present in the map")
+      )))
 
 #_(run-tests)
