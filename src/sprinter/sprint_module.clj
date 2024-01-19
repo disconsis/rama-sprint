@@ -107,14 +107,20 @@
                          $$users)
        (ack-return> {:success true})))
 
-    (declare-pstate ps $$user->projects {UUID (map-schema
-                                               String ;; project-name
-                                               UUID   ;; project-id
-                                               {:subindex? true})})
-    (declare-pstate ps $$projects {UUID (fixed-keys-schema
-                                          {:project-name String
-                                           :created-by UUID
-                                           :created-at Long})})
+
+    (declare-pstate ps $$user->projects
+                    {UUID
+                     (map-schema
+                      String    ;; project-name
+                      UUID      ;; project-id
+                      {:subindex? true})})
+
+    (declare-pstate ps $$projects
+                    {UUID
+                     (fixed-keys-schema
+                      {:project-name String
+                       :created-by UUID
+                       :created-at Long})})
 
     (<<sources ps
       ;; project creation flow
