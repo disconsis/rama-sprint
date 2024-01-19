@@ -65,3 +65,35 @@
       (is (some? (foreign-select-one (keypath "bar") $$username->id))
           "new name should be present in the map")
       )))
+
+(deftest projects-test
+(with-open [ipc (rtest/create-ipc)]
+    (rtest/launch-module! ipc sut/SprintModule {:tasks 4 :threads 2})
+    (let [module-name (get-module-name sut/SprintModule)
+          *user-connects-depot (foreign-depot ipc module-name "*user-connects-depot")
+          user-id-1 (random-uuid)
+          user-id-2 (random-uuid)
+          *project-creation-depot (foreign-depot ipc module-name "*project-creation-depot")
+          *project-edits-depot (foreign-depot ipc module-name "*project-edits-depot")
+          project-id-1 (random-uuid)
+          project-id-2 (random-uuid)]
+
+      (foreign-append! *user-connects-depot
+                       (sut/->UserConnect user-id-1 "user-1"))
+      (foreign-append! *user-connects-depot
+                       (sut/->UserConnect user-id-2 "user-2"))
+
+      (is (sut/project-success?
+           (foreign-append! *project-creation-depot
+                            (sut/->ProjectCreate project-id-1 "proj-1" user-id-1)))
+          "project creation succeeds")
+
+      (is (sut/project-failure?
+           (foreign-append! *project-creation-depot
+                            (sut/->ProjectCreate project-id-2 "proj-1" user-id-1)))
+          "one user can't create another project with the same name")
+
+      (is (sut/project-success?
+           (foreign-append! *project-creation-depot
+                            (sut/->ProjectCreate project-id-2 "proj-1" user-id-2)))
+          "other user can create another project with a used project name"))))

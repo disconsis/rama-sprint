@@ -19,7 +19,7 @@
 (defrecord UserConnect [user-id user-name])
 (defrecord UserEdit [user-id field value])
 
-(defrecord ProjectCreate [project-name])
+(defrecord ProjectCreate [project-id project-name user-id])
 (defrecord ProjectEdit [project-id field value])
 
 (defn current-time []
@@ -106,6 +106,12 @@
 
 (def user-failure?
   (complement user-success?))
+
+(defn project-success? [result]
+  (get-in result ["projects" :success]))
+
+(def project-failure?
+  (complement project-success?))
 
 ;; ------------
 ;;   Dev area
