@@ -1,7 +1,7 @@
 (ns sprinter.sprint-module
   (:use [com.rpl.rama]
         [com.rpl.rama.path])
-  (:require [com.rpl.rama.aggs :as aggs]
+  (:require [com.rpl.rama.aggs :as aggs :refer [+last]]
             [com.rpl.rama.ops :as ops])
   (:import (clojure.lang Keyword)
            (java.util UUID)))
@@ -23,6 +23,12 @@
 (defn current-time []
   (System/currentTimeMillis))
 
+(defn nil-or-equal [value]
+  (fn [other]
+    (or (nil? other) (= value other))))
+
+;; TODO expire user sessions and delete their projects
+
 (defmodule SprintModule [setup topologies]
   ;; receives UserConnect events
   (declare-depot setup *user-connects-depot (hash-by :user-name))
@@ -34,13 +40,14 @@
   ;; receives ProjectEdit events
   (declare-depot setup *project-edits-depot (hash-by :project-id))
 
-  (let [s (stream-topology topologies "users")]
-    (declare-pstate s $$username->id {String UUID})
-    (declare-pstate s $$users {UUID (fixed-keys-schema
-                                     {:user-name String
-                                      :connected-at Long})})
+  (let [us (stream-topology topologies "users")
+        ps (stream-topology topologies "projects")]
+    (declare-pstate us $$username->id {String UUID})
+    (declare-pstate us $$users {UUID (fixed-keys-schema
+                                       {:user-name String
+                                        :connected-at Long})})
 
-    (<<sources s
+    (<<sources us
       ;; user connection flow
       (source> *user-connects-depot :> {:keys [*user-name *user-id] :as *user-connect})
       (local-select> (keypath *user-name) $$username->id :> *curr-user-id)
@@ -96,7 +103,43 @@
        (default>)
        (local-transform> [(keypath *user-id *field) (termval *value)]
                          $$users)
-       (ack-return> {:success true})))))
+       (ack-return> {:success true})))
+
+    (declare-pstate ps $$user->projects {UUID (map-schema
+                                               String ;; project-name
+                                               UUID   ;; project-id
+                                               {:subindex? true})})
+    (declare-pstate ps $$projects {UUID (fixed-keys-schema
+                                          {:project-name String
+                                           :created-by UUID
+                                           :created-at Long})})
+
+    (<<sources ps
+      (source> *project-creation-depot :> {:keys [*project-id *project-name *user-id] :as *project-create})
+      (<<cond
+       (case> (nil? (select> (keypath *user-id) $$users)))
+       (ack-return> {:success false
+                     :reason "unknown user-id"})
+
+       (case> (select> [(keypath *user-id *project-name)
+                        ;; we need to check if the old project id is equal to this one
+                        ;; since that indicates that this is a retried request
+                        (view (complement (nil-or-equal *project-id)))]
+                       $$user->projects))
+       (ack-return> {:success false
+                     :reason "project name already used by user"})
+
+       (default>)
+       (|hash *user-id)
+       (+compound $$user->projects {*user-id {*project-name (+last *project-id)}})
+       (|hash *project-id)
+       (local-transform> [(keypath *project-id)
+                          (multi-path [:project-name (termval *project-name)]
+                                      [:created-by (termval *user-id)]
+                                      [:created-at (termval (current-time))])]
+                         $$projects)
+       (ack-return> {:success true
+                     :project-id *project-id})))))
 
 
 (defn user-success? [result]

@@ -67,7 +67,7 @@
       )))
 
 (deftest projects-test
-(with-open [ipc (rtest/create-ipc)]
+  (with-open [ipc (rtest/create-ipc)]
     (rtest/launch-module! ipc sut/SprintModule {:tasks 4 :threads 2})
     (let [module-name (get-module-name sut/SprintModule)
           *user-connects-depot (foreign-depot ipc module-name "*user-connects-depot")
