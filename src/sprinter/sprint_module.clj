@@ -45,24 +45,25 @@
     (<<sources s
       (source> *user-connects-depot :> {:keys [*user-name *user-id] :as *user-connect})
       (local-select> (keypath *user-name) $$username->id :> *curr-user-id)
-      (<<if (and> (some? *curr-user-id)
-                  (not= *user-id *curr-user-id))
-        (println "could not accept" *user-connect "since username is taken with id" *curr-user-id)
-        (ack-return> {:success false
-                      :reason "username already taken"})
-        (else>)
-        (local-transform> [(keypath *user-name) (termval *user-id)]
-                          $$username->id)
-        (|hash *user-id)
-        (identity (current-time) :> *time)
-        (local-transform>
-         [(keypath *user-id)
-          (multi-path [:user-name (termval *user-name)]
-                      [:connected-at (termval *time)])]
-         $$users)
-        (println "accepted user" *user-id *user-name *time)
-        (ack-return> {:success true
-                      :user-id *user-id})))))
+      (ifexpr (and> (some? *curr-user-id)
+                    (not= *user-id *curr-user-id))
+        (<<do
+         (println "could not accept" *user-connect "since username is taken with id" *curr-user-id)
+         (ack-return> {:success false
+                       :reason "username already taken"}))
+        (<<do
+         (local-transform> [(keypath *user-name) (termval *user-id)]
+                           $$username->id)
+         (|hash *user-id)
+         (identity (current-time) :> *time)
+         (local-transform>
+          [(keypath *user-id)
+           (multi-path [:user-name (termval *user-name)]
+                       [:connected-at (termval *time)])]
+          $$users)
+         (println "accepted user" *user-id *user-name *time)
+         (ack-return> {:success true
+                       :user-id *user-id}))))))
 
 
 (defn user-success? [result]
