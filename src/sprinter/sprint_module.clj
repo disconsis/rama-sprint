@@ -6,6 +6,10 @@
   (:import (clojure.lang Keyword)
            (java.util UUID)))
 
+(def ^:dynamic *user-expiration-millis*
+  "number of millis of no interaction after which a user connection expires"
+  (* 5 60 1000))
+
 
 ;; Since stream topologies have atleast-once semantics, we need the user to
 ;; submit a user-id to handle the case where the same UserConnect event is

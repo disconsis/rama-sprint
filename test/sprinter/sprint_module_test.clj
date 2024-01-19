@@ -66,6 +66,20 @@
           "new name should be present in the map")
       )))
 
+(deftest user-expiration-test
+  (binding [sut/*user-expiration-millis* (* 5 1000)]
+   (with-open [ipc (rtest/create-ipc)]
+     (rtest/launch-module! ipc sut/SprintModule {:tasks 4 :threads 2})
+     (let [module-name (get-module-name sut/SprintModule)
+           *user-connects-depot (foreign-depot ipc module-name "*user-connects-depot")
+           $$users (foreign-pstate ipc module-name "$$users")
+           user-id (random-uuid)]
+
+       (foreign-append! *user-connects-depot
+                        (sut/->UserConnect user-id "ketan"))
+       (Thread/sleep (* 5 1000))
+       (is (nil? (foreign-select-one (keypath user-id) $$users)))))))
+
 (deftest projects-test
   (with-open [ipc (rtest/create-ipc)]
     (rtest/launch-module! ipc sut/SprintModule {:tasks 4 :threads 2})
