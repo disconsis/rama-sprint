@@ -45,12 +45,12 @@
     (<<sources s
       (source> *user-connects-depot :> {:keys [*user-name *user-id] :as *user-connect})
       (local-select> (keypath *user-name) $$username->id :> *curr-user-id)
-      (ifexpr (and> (some? *curr-user-id)
-                    (not= *user-id *curr-user-id))
+      (<<if (and> (some? *curr-user-id) (not= *user-id *curr-user-id))
         (<<do
          (println "could not accept" *user-connect "since username is taken with id" *curr-user-id)
          (ack-return> {:success false
                        :reason "username already taken"}))
+        (else>)
         (<<do
          (local-transform> [(keypath *user-name) (termval *user-id)]
                            $$username->id)
