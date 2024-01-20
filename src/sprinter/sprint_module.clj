@@ -2,14 +2,23 @@
   (:use [com.rpl.rama]
         [com.rpl.rama.path])
   (:require [com.rpl.rama.aggs :as aggs :refer [+last]]
-            [com.rpl.rama.ops :as ops])
+            [com.rpl.rama.ops :as ops]
+            [clojure.math :refer [floor]])
   (:import (clojure.lang Keyword)
            (java.util UUID)))
 
-(def ^:dynamic *user-expiration-millis*
+(def user-expiration-millis
   "number of millis of no interaction after which a user connection expires"
   (* 5 60 1000))
 
+(defn current-time []
+  (System/currentTimeMillis))
+
+(defn expiration-time []
+  (- (current-time) user-expiration-millis))
+
+(defn timestamp [millis]
+  (str (java.util.Date. millis)))
 
 ;; Since stream topologies have atleast-once semantics, we need the user to
 ;; submit a user-id to handle the case where the same UserConnect event is
@@ -24,13 +33,11 @@
 (defrecord ProjectCreate [project-id project-name user-id])
 (defrecord ProjectEdit [project-id user-id field value])
 
-(defn current-time []
-  (System/currentTimeMillis))
-
 (defn nil-or-equal-to? [expected actual]
   (or (nil? actual) (= expected actual)))
 
-;; TODO expire user sessions and delete their projects
+(defn sorted-map-last-key [map]
+  (first (last map)))
 
 (defmodule SprintModule [setup topologies]
   ;; receives UserConnect events
@@ -43,15 +50,43 @@
   ;; receives ProjectEdit events
   (declare-depot setup *project-edits-depot (hash-by :project-id))
 
-  (let [us (stream-topology topologies "users")
-        ps (stream-topology topologies "projects")]
-    (declare-pstate us $$username->id {String UUID})
-    (declare-pstate us $$users {UUID (fixed-keys-schema
-                                       {:user-name String
-                                        :connected-at Long})})
+  ;; on average, the user connects in the middle of two expiration ticks.
+  ;; so the average time for user expiry happens is `1.5 * tick-length`.
+  ;; we want this average to be equal to user-expiration-millis,
+  ;; so tick-length = (/ user-expiration-millis 1.5)
+  ;;
+  ;; <--------- tick-length -------->
+  ;; |--------------x---------------|------------------------------|
+  ;;                \_ user connect               user expiration _/
+  (declare-tick-depot setup *user-expirations-depot
+                      ;; tick-length
+                      (floor (/ user-expiration-millis 1.5)))
 
-    (<<sources us
-      ;; user connection flow
+  (declare-depot setup *user-interactions-depot (hash-by :user-id))
+
+  (let [s (stream-topology topologies "users+projects")]
+    (declare-pstate s $$username->id {String UUID})
+    (declare-pstate s $$users {UUID (fixed-keys-schema
+                                      {:user-name String
+                                       :connected-at Long})})
+    (declare-pstate s $$last-user-interaction {UUID Long})
+
+    (declare-pstate s $$user->projects
+                    {UUID
+                     (map-schema
+                      String ;; project-name
+                      UUID   ;; project-id
+                      {:subindex? true})})
+
+    (declare-pstate s $$projects
+                    {UUID
+                     (fixed-keys-schema
+                      {:project-name String
+                       :created-by UUID
+                       :created-at Long})})
+
+    (<<sources s
+      ;; ** user connection flow
       (source> *user-connects-depot :> {:keys [*user-name *user-id]})
       (local-select> (keypath *user-name) $$username->id :> *curr-user-id)
       (<<if (not (nil-or-equal-to? *user-id *curr-user-id))
@@ -64,7 +99,8 @@
                             (multi-path [:user-name (termval *user-name)]
                                         [:connected-at (termval (current-time))])]
                            $$users)
-
+         (local-transform> [(keypath *user-id) (termval (current-time))]
+                           $$last-user-interaction)
          ;; need to do this last since this is the first thing we check in case of failures
          (|hash *user-name)
          (local-transform> [(keypath *user-name) (termval *user-id)]
@@ -72,7 +108,7 @@
          (ack-return> {:success true
                        :user-id *user-id})))
 
-      ;; user edit flow
+      ;; ** user edit flow
       (source> *user-edits-depot :> {:keys [*user-id *field *value]})
       (local-select> (keypath *user-id) $$users :> {*curr-user-name :user-name :as *curr-info})
       (<<cond
@@ -90,6 +126,7 @@
                        :reason "username already taken"})
          (else>)
          (<<do
+          ;; TODO check if we can use the `map-key` navigator here (does it work across partitions?)
           (|hash *curr-user-name)
           (local-transform> [(keypath *curr-user-name) NONE>]
                             $$username->id)
@@ -105,25 +142,41 @@
        (default>)
        (local-transform> [(keypath *user-id *field) (termval *value)]
                          $$users)
-       (ack-return> {:success true})))
+       (ack-return> {:success true}))
 
+      (<<if (some? *curr-info)
+        (local-transform> [(keypath *user-id) (termval (current-time))]
+                          $$last-user-interaction))
 
-    (declare-pstate ps $$user->projects
-                    {UUID
-                     (map-schema
-                      String    ;; project-name
-                      UUID      ;; project-id
-                      {:subindex? true})})
+      ;; ** user expirations flow
+      ;;
+      ;; NOTE idk the failure semantics here.
+      ;; could lead to memory leaks if a node dies in the middle.
+      (source> *user-expirations-depot)
+      (|all)
+      (identity (expiration-time) :> *expiry-time)
+      (loop<- [*i 0 :> *last-user-interactions]
+              (yield-if-overtime)
+              (local-select> (sorted-map-range-from *i 1000) $$last-user-interaction :> *last-user-interactions)
+              (:> *last-user-interactions)
+              (<<if (= 1000 (count *last-user-interactions))
+                (continue> (sorted-map-last-key *last-user-interactions))))
+      (local-select> ALL *last-user-interactions :> [*user-id *last-time])
+      (filter> (< *last-time *expiry-time))
+      (local-select> (keypath *user-id :user-name) $$users :> *user-name)
+      (local-transform> [(keypath *user-id) NONE>] $$users)
+      (local-transform> [(keypath *user-id) NONE>] $$last-user-interaction)
+      ;; remove all projects of this user
+      (local-select> [(keypath *user-id) (subselect MAP-VALS)] $$user->projects :> *user-projects)
+      (local-transform> [(keypath *user-id) NONE>] $$user->projects)
+      (ops/explode *user-projects :> !project-id)
+      (|hash !project-id)
+      (local-transform> [(keypath !project-id) NONE>] $$projects)
+      ;; remove username from pool
+      (|hash *user-name)
+      (local-transform> [(keypath *user-name) NONE>] $$username->id)
 
-    (declare-pstate ps $$projects
-                    {UUID
-                     (fixed-keys-schema
-                      {:project-name String
-                       :created-by UUID
-                       :created-at Long})})
-
-    (<<sources ps
-      ;; project creation flow
+      ;; ** project creation flow
       (source> *project-creation-depot :> {:keys [*project-id *project-name *user-id]})
       (<<cond
        (case> (nil? (select> (keypath *user-id) $$users)))
@@ -152,7 +205,7 @@
        (ack-return> {:success true
                      :project-id *project-id}))
 
-      ;; project edit flow
+      ;; ** project edit flow
       (source> *project-edits-depot :> {:keys [*project-id *user-id *field *value]})
       (select> (keypath *project-id) $$projects :> {:keys [*created-by] :as *curr-info})
       (<<cond
@@ -195,17 +248,11 @@
        (ack-return> {:success true})))))
 
 
-(defn user-success? [result]
-  (get-in result ["users" :success]))
+(defn success? [result]
+  (get-in result ["users+projects" :success]))
 
-(def user-failure?
-  (complement user-success?))
-
-(defn project-success? [result]
-  (get-in result ["projects" :success]))
-
-(def project-failure?
-  (complement project-success?))
+(def failure?
+  (complement success?))
 
 ;; ------------
 ;;   Dev area
@@ -217,3 +264,10 @@
 ;; (?<-
  ;;  (filter> (nil? (local-select> (keypath "ketan") {"ketan" (random-uuid)})))
 ;;  (println "connected"))
+
+;; (?<-
+;;  (println
+;;   (local-select> [ALL (selected? [LAST (pred< 1500)]) FIRST]
+;;                  {"ketan" 1000
+;;                   "alpha" 2000
+;;                   "beta" 1400})))
