@@ -67,18 +67,46 @@
       )))
 
 (deftest user-expiration-test
-  (binding [sut/*user-expiration-millis* (* 5 1000)]
+  (with-redefs [sut/user-expiration-millis (* 5 1000)]
    (with-open [ipc (rtest/create-ipc)]
-     (rtest/launch-module! ipc sut/SprintModule {:tasks 4 :threads 2})
+     (rtest/launch-module! ipc sut/SprintModule {:tasks 1 :threads 1})
      (let [module-name (get-module-name sut/SprintModule)
            *user-connects-depot (foreign-depot ipc module-name "*user-connects-depot")
+           *project-creation-depot (foreign-depot ipc module-name "*project-creation-depot")
            $$users (foreign-pstate ipc module-name "$$users")
-           user-id (random-uuid)]
+           $$username->id (foreign-pstate ipc module-name "$$username->id")
+           $$projects (foreign-pstate ipc module-name "$$projects")
+           user-id (random-uuid)
+           user-id-2 (random-uuid)
+           project-id (random-uuid)]
 
        (foreign-append! *user-connects-depot
                         (sut/->UserConnect user-id "ketan"))
+
+       (foreign-append! *project-creation-depot
+                        (sut/->ProjectCreate project-id "project" user-id))
+
+       (Thread/sleep (* 3 1000))
+
+       (is (some? (foreign-select-one (keypath user-id) $$users))
+           "user should not be expired yet")
+
+       (foreign-append! *user-connects-depot
+                        (sut/->UserConnect user-id-2 "foo"))
+
        (Thread/sleep (* 5 1000))
-       (is (nil? (foreign-select-one (keypath user-id) $$users)))))))
+
+       (is (some? (foreign-select-one (keypath user-id-2) $$users))
+           "user-2 should not be expired yet")
+
+       (is (nil? (foreign-select-one (keypath user-id) $$users))
+           "user should be expired after some time")
+
+       (is (nil? (foreign-select-one (keypath "ketan") $$username->id))
+           "username should be removed after expiry")
+
+       (is (nil? (foreign-select-one (keypath project-id) $$projects))
+           "user's projects should be removed after expiry")))))
 
 (deftest projects-test
   (with-open [ipc (rtest/create-ipc)]
